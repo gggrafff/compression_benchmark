@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
+	"github.com/klauspost/compress/s2"
+	"github.com/klauspost/compress/zstd"
 	lz4 "github.com/pierrec/lz4/v4"
 	"github.com/ulikunitz/xz/lzma"
 )
@@ -91,6 +93,20 @@ func compareCompressionCoefficients(data []byte) {
 		fmt.Printf("snappy compressed size: %dkb; compression coefficient: %.2f\n", len(snappyData)/1024, float64(len(data))/float64(len(snappyData)))
 		if !bytes.Equal(data, decompressSnappy(snappyData)) {
 			panic("snappy decompression wrong")
+		}
+	}
+	for _, l := range []zstd.EncoderLevel{zstd.SpeedFastest, zstd.SpeedDefault, zstd.SpeedBetterCompression, zstd.SpeedBestCompression} {
+		zstdData := compressZstd(data, l)
+		fmt.Printf("zstd(%d) compressed size: %dkb; compression coefficient: %.2f\n", l, len(zstdData)/1024, float64(len(data))/float64(len(zstdData)))
+		if !bytes.Equal(data, decompressZstd(zstdData)) {
+			panic("zstd decompression wrong")
+		}
+	}
+	for _, l := range []s2.WriterOption{s2.WriterUncompressed(), s2.WriterBetterCompression(), s2.WriterBestCompression()} {
+		s2Data := compressS2(data, l)
+		fmt.Printf("s2(%v) compressed size: %dkb; compression coefficient: %.2f\n", l, len(s2Data)/1024, float64(len(data))/float64(len(s2Data)))
+		if !bytes.Equal(data, decompressS2(s2Data)) {
+			panic("s2 decompression wrong")
 		}
 	}
 }
@@ -233,6 +249,36 @@ func compareCompressionSpeeds(data []byte) {
 		}
 		end = time.Now()
 		fmt.Printf("snappy average decompression time: %.2fs\n", float64(end.Sub(begin).Seconds())/float64(countMeasures))
+	}
+	for _, l := range []zstd.EncoderLevel{zstd.SpeedFastest, zstd.SpeedDefault, zstd.SpeedBetterCompression, zstd.SpeedBestCompression} {
+		begin := time.Now()
+		for i := 0; i < countMeasures; i++ {
+			_ = compressZstd(data, l)
+		}
+		end := time.Now()
+		fmt.Printf("zstd(%d) average compression time: %.2fs\n", l, float64(end.Sub(begin).Seconds())/float64(countMeasures))
+		zstdData := compressZstd(data, l)
+		begin = time.Now()
+		for i := 0; i < countMeasures; i++ {
+			_ = decompressZstd(zstdData)
+		}
+		end = time.Now()
+		fmt.Printf("zstd(%d) average decompression time: %.2fs\n", l, float64(end.Sub(begin).Seconds())/float64(countMeasures))
+	}
+	for _, l := range []s2.WriterOption{s2.WriterUncompressed(), s2.WriterBetterCompression(), s2.WriterBestCompression()} {
+		begin := time.Now()
+		for i := 0; i < countMeasures; i++ {
+			_ = compressS2(data, l)
+		}
+		end := time.Now()
+		fmt.Printf("s2(%v) average compression time: %.2fs\n", l, float64(end.Sub(begin).Seconds())/float64(countMeasures))
+		s2Data := compressS2(data, l)
+		begin = time.Now()
+		for i := 0; i < countMeasures; i++ {
+			_ = decompressS2(s2Data)
+		}
+		end = time.Now()
+		fmt.Printf("s2(%v) average decompression time: %.2fs\n", l, float64(end.Sub(begin).Seconds())/float64(countMeasures))
 	}
 }
 
@@ -409,6 +455,48 @@ func compressSnappy(data []byte) []byte {
 func decompressSnappy(compressed []byte) []byte {
 	var b bytes.Buffer
 	r := snappy.NewReader(bytes.NewReader(compressed))
+	b.ReadFrom(r)
+
+	return b.Bytes()
+}
+
+func compressZstd(data []byte, level zstd.EncoderLevel) []byte {
+	var b bytes.Buffer
+	w, err := zstd.NewWriter(&b, zstd.WithEncoderLevel(level))
+	if err != nil {
+		panic(err)
+	}
+	w.Write(data)
+	w.Close()
+
+	compressed := b.Bytes()
+	return compressed
+}
+
+func decompressZstd(compressed []byte) []byte {
+	var b bytes.Buffer
+	r, err := zstd.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		panic(err)
+	}
+	b.ReadFrom(r)
+
+	return b.Bytes()
+}
+
+func compressS2(data []byte, level s2.WriterOption) []byte {
+	var b bytes.Buffer
+	w := s2.NewWriter(&b, level)
+	w.Write(data)
+	w.Close()
+
+	compressed := b.Bytes()
+	return compressed
+}
+
+func decompressS2(compressed []byte) []byte {
+	var b bytes.Buffer
+	r := s2.NewReader(bytes.NewReader(compressed))
 	b.ReadFrom(r)
 
 	return b.Bytes()
